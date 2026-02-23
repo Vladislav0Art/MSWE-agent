@@ -4,6 +4,7 @@ from typing import Optional, Union
 from multi_swe_bench.harness.image import Config, File, Image
 from multi_swe_bench.harness.instance import Instance, TestResult
 from multi_swe_bench.harness.pull_request import PullRequest
+from multi_swe_bench.harness.metamorphic import Metamorphic
 
 
 class MockitoImageBase(Image):
@@ -130,6 +131,7 @@ class MockitoImageDefault(Image):
 
     def files(self) -> list[File]:
         return [
+            # normal patches
             File(
                 ".",
                 "fix.patch",
@@ -140,6 +142,10 @@ class MockitoImageDefault(Image):
                 "test.patch",
                 f"{self.pr.test_patch}",
             ),
+            # metamorphic patches
+            Metamorphic.base_patch(self.pr),
+            Metamorphic.fix_patch(self.pr),
+            # scripts
             File(
                 ".",
                 "check_git_changes.sh",
@@ -159,10 +165,7 @@ fi
 echo "check_git_changes: No uncommitted changes"
 exit 0
 
-""".format(
-                    pr=self.pr
-                ),
-            ),
+""".format(pr=self.pr)),
             File(
                 ".",
                 "prepare.sh",
@@ -181,6 +184,7 @@ bash /home/check_git_changes.sh
                     pr=self.pr
                 ),
             ),
+            # applying patches and run tests
             File(
                 ".",
                 "run.sh",
@@ -222,6 +226,9 @@ git apply /home/test.patch /home/fix.patch
                     pr=self.pr
                 ),
             ),
+        # applying metamorphic patches and run tests
+            Metamorphic.base_run(self.pr),
+            Metamorphic.fix_run(self.pr),
         ]
 
     def dockerfile(self) -> str:
@@ -262,6 +269,14 @@ class Mockito(Instance):
     def dependency(self) -> Optional[Image]:
         return MockitoImageDefault(self.pr, self._config)
 
+    # metamorphic run scripts
+    def metamorphic_run(self) -> str:
+        return "bash /home/metamorphic-run.sh"
+
+    def metamorphic_fix_patch_run(self) -> str:
+        return "bash /home/metamorphic-fix-run.sh"
+
+    # normal run scripts
     def run(self) -> str:
         return "bash /home/run.sh"
 
