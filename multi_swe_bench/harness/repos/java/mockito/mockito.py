@@ -176,7 +176,10 @@ cd /home/{self.pr.repo}
 git reset --hard
 bash /home/check_git_changes.sh
 git checkout {self.pr.base.sha}
+
+# apply metamorphic patch (if present)
 {Metamorphic.apply_metamorphic_patch_cmd(pr=self.pr)}
+
 bash /home/check_git_changes.sh
 
 ./gradlew build || true
