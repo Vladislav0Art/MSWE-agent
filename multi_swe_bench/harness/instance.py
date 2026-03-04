@@ -41,7 +41,6 @@ class Instance:
     def name(self) -> str:
         return self.dependency().image_full_name()
 
-    # NOTE: Normal run scripts:
     def run(self) -> str:
         raise NotImplementedError
 

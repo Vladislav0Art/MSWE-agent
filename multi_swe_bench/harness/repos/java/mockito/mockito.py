@@ -141,7 +141,6 @@ class MockitoImageDefault(Image):
                 "test.patch",
                 f"{self.pr.test_patch}",
             ),
-            # scripts
             File(
                 ".",
                 "check_git_changes.sh",
@@ -182,7 +181,6 @@ bash /home/check_git_changes.sh
 
 """,
             ),
-            # applying patches and run tests
             File(
                 ".",
                 "run.sh",
@@ -264,7 +262,6 @@ class Mockito(Instance):
     def dependency(self) -> Optional[Image]:
         return MockitoImageDefault(self.pr, self._config)
 
-    # normal run scripts
     def run(self) -> str:
         return "bash /home/run.sh"
 
