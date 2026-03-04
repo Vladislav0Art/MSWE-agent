@@ -3,6 +3,30 @@ from multi_swe_bench.harness.image import File
 
 class Metamorphic:
     @staticmethod
+    def apply_metamorphic_patch_cmd(pr: PullRequest, commit_message: str = "Apply metamorphic transformation") -> str:
+        """
+        Returns git command for **applying and committing** `metamorphic_base_patch`,
+        if it's not None in the `pr.base`. Otherwise, returns an empty string (i.e., no-op behavior).
+        """
+        patch = pr.base.metamorphic_base_patch
+        if (patch is not None) and (patch != ""):
+            return Metamorphic._produce_apply_patch_commands(patch, commit_message)
+        return ""
+
+    @staticmethod
+    def _produce_apply_patch_commands(patch: str, commit_message: str):
+        """
+        Returns git command for **applying and committing** `patch` with a given `commit_message`.
+        """
+        return (
+            f"git apply - <<'__EOF_METAMORPHIC_PATCH__'\n"
+            f"{patch}\n"
+            f"__EOF_METAMORPHIC_PATCH__\n"
+            f"git add -A && git commit -m '{commit_message}'"
+        )
+
+
+    @staticmethod
     def base_patch(pr: PullRequest) -> File:
         return File(
             "",
