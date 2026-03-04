@@ -169,20 +169,19 @@ exit 0
             File(
                 ".",
                 "prepare.sh",
-                """#!/bin/bash
+                f"""#!/bin/bash
 set -e
 
-cd /home/{pr.repo}
+cd /home/{self.pr.repo}
 git reset --hard
 bash /home/check_git_changes.sh
-git checkout {pr.base.sha}
+git checkout {self.pr.base.sha}
+{Metamorphic.apply_metamorphic_patch_cmd(pr=self.pr)}
 bash /home/check_git_changes.sh
 
 ./gradlew build || true
 
-""".format(
-                    pr=self.pr
-                ),
+""",
             ),
             # applying patches and run tests
             File(
