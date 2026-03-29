@@ -226,11 +226,29 @@ class OpenAIModel(BaseModel):
         },
 
         # adding newer modern OpenAI models
-        # https://developers.openai.com/api/docs/models/gpt-5.2
+        # GPT-5.2: https://developers.openai.com/api/docs/models/gpt-5.2
         "gpt-5.2-2025-12-11": {
             "max_context": 400_000,
-            "cost_per_input_token": 1.75e-6, # 1.75 / 1_000_000,
-            "cost_per_output_token": 1.4e-5, # 14 / 1_000_000,
+            "cost_per_input_token": 1.75e-6, # 1.75 / 1_000_000
+            "cost_per_output_token": 1.4e-5, # 14 / 1_000_000
+        },
+        # GPT-5.4: https://developers.openai.com/api/docs/models/gpt-5.4
+        "gpt-5.4-2026-03-05": {
+            "max_context": 1_050_000,
+            "cost_per_input_token": 2.5e-6, # 2.50 / 1_000_000
+            "cost_per_output_token": 1.5e-5, # 15 / 1_000_000
+        },
+        # GPT-5.4 mini: https://developers.openai.com/api/docs/models/gpt-5.4-mini
+        "gpt-5.4-mini-2026-03-17": {
+            "max_context": 400_000,
+            "cost_per_input_token": 7.5e-7, # 0.75 / 1_000_000
+            "cost_per_output_token": 4.5e-6, # 4.50 / 1_000_000
+        },
+        # GPT-5.3-Codex: https://developers.openai.com/api/docs/models/gpt-5.3-codex
+        "gpt-5.3-codex": {
+            "max_context": 400_000,
+            "cost_per_input_token": 1.75e-6, # 1.75 / 1_000_000
+            "cost_per_output_token": 1.4e-5, # 14 / 1_000_000
         },
     }
 
@@ -243,7 +261,10 @@ class OpenAIModel(BaseModel):
         "gpt3-0125": "gpt-3.5-turbo-0125",
         "gpt4-turbo": "gpt-4-turbo-2024-04-09",
         "gpt4o": "gpt-4o-2024-05-13",
+        # newer GPT-5 models
         "gpt5.2": "gpt-5.2-2025-12-11",
+        "gpt5.4": "gpt-5.4-2026-03-05",
+        "gpt5.4-mini": "gpt-5.4-mini-2026-03-17",
     }
 
     def __init__(self, args: ModelArguments, commands: list[Command]):
