@@ -385,13 +385,33 @@ class AnthropicModel(BaseModel):
             "cost_per_input_token": 2.5e-07,
             "cost_per_output_token": 1.25e-06,
         },
+
+        # newer Claude models: https://platform.claude.com/docs/en/about-claude/models/overview
+        "claude-opus-4-6": {
+            "max_context": 1_000_000,
+            "max_tokens": 128_000,
+            "cost_per_input_token": 5.0e-6, # 5 / 1_000_000
+            "cost_per_output_token": 2.5e-5, # 25 / 1_000_000
+        },
+        "claude-sonnet-4-6": {
+            "max_context": 1_000_000,
+            "max_tokens": 64_000,
+            "cost_per_input_token": 3.0e-6, # 3 / 1_000_000
+            "cost_per_output_token": 1.5e-5, # 15 / 1_000_000
+        },
+        "claude-haiku-4-5-20251001": {
+            "max_context": 200_000,
+            "max_tokens": 64_000,
+            "cost_per_input_token": 1.0e-6, # 1 / 1_000_000
+            "cost_per_output_token": 5.0e-6, # 5 / 1_000_000
+        },
     }
 
     SHORTCUTS = {
         "claude-2": "claude-2.1",
-        "claude-opus": "claude-3-opus-20240229",
-        "claude-sonnet": "claude-3-sonnet-20240229",
-        "claude-haiku": "claude-3-haiku-20240307",
+        "claude-opus": "claude-opus-4-6",
+        "claude-sonnet": "claude-sonnet-4-6",
+        "claude-haiku": "claude-haiku-4-5-20251001",
     }
 
     def __init__(self, args: ModelArguments, commands: list[Command]):
