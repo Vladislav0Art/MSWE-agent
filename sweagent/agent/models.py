@@ -7,9 +7,10 @@ from collections import defaultdict
 from dataclasses import dataclass, fields
 from pathlib import Path
 
+import httpx
 import together
 from anthropic import AI_PROMPT, HUMAN_PROMPT, Anthropic, AnthropicBedrock
-from openai import AzureOpenAI, BadRequestError, OpenAI
+from openai import AzureOpenAI, BadRequestError, OpenAI, DefaultHttpxClient
 from simple_parsing.helpers.serialization.serializable import FrozenSerializable, Serializable
 from tenacity import (
     retry,
@@ -252,7 +253,25 @@ class OpenAIModel(BaseModel):
             )
         else:
             api_base_url: str | None = keys_config.get("OPENAI_API_BASE_URL", None)
-            self.client = OpenAI(api_key=keys_config["OPENAI_API_KEY"], base_url=api_base_url)
+            api_key = keys_config["OPENAI_API_KEY"]
+            default_headers = None
+
+            use_grazie_proxy = keys_config.get("USE_GRAZIE_PROXY", False)
+            if use_grazie_proxy:
+                default_headers = {
+                    "Content-Type": "application/json",
+                    "Grazie-Agent": '{"name": "mswe-agent-run", "version": "test"}',
+                    # When using Grazie, the `OPENAI_API_KEY` is expected to be the Grazie JWT token
+                    "Grazie-Authenticate-JWT": api_key,
+                }
+
+            print(f"OpenAI API Base URL: {api_base_url}")
+
+            self.client = OpenAI(
+                api_key=api_key,
+                base_url=api_base_url,
+                default_headers=default_headers,
+            )
 
     def history_to_messages(
         self,
