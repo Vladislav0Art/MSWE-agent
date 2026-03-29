@@ -253,24 +253,28 @@ class OpenAIModel(BaseModel):
             )
         else:
             api_base_url: str | None = keys_config.get("OPENAI_API_BASE_URL", None)
-            api_key = keys_config["OPENAI_API_KEY"]
-            default_headers = None
+            additional_headers = None
 
             use_grazie_proxy = keys_config.get("USE_GRAZIE_PROXY", False)
-            if use_grazie_proxy:
-                default_headers = {
+            # either boolean true or stringified "true"
+            if (use_grazie_proxy is True) or (type(use_grazie_proxy) is str and use_grazie_proxy.lower() == "true"):
+                api_key = keys_config["GRAZIE_API_KEY"]
+                additional_headers = {
                     "Content-Type": "application/json",
                     "Grazie-Agent": '{"name": "mswe-agent-run", "version": "test"}',
-                    # When using Grazie, the `OPENAI_API_KEY` is expected to be the Grazie JWT token
+                    # use Grazie JWT token
                     "Grazie-Authenticate-JWT": api_key,
                 }
+            else:
+                api_key = keys_config["OPENAI_API_KEY"]
 
             print(f"OpenAI API Base URL: {api_base_url}")
+            print(f"Use Grazie: {use_grazie_proxy}")
 
             self.client = OpenAI(
                 api_key=api_key,
                 base_url=api_base_url,
-                default_headers=default_headers,
+                default_headers=additional_headers,
             )
 
     def history_to_messages(
