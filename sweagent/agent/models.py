@@ -224,6 +224,14 @@ class OpenAIModel(BaseModel):
             "cost_per_input_token": 5e-06,
             "cost_per_output_token": 15e-06,
         },
+
+        # adding newer modern OpenAI models
+        # https://developers.openai.com/api/docs/models/gpt-5.2
+        "gpt-5.2-2025-12-11": {
+            "max_context": 400_000,
+            "cost_per_input_token": 1.75e-6, # 1.75 / 1_000_000,
+            "cost_per_output_token": 1.4e-5, # 14 / 1_000_000,
+        },
     }
 
     SHORTCUTS = {
@@ -235,6 +243,7 @@ class OpenAIModel(BaseModel):
         "gpt3-0125": "gpt-3.5-turbo-0125",
         "gpt4-turbo": "gpt-4-turbo-2024-04-09",
         "gpt4o": "gpt-4o-2024-05-13",
+        "gpt5.2": "gpt-5.2-2025-12-11",
     }
 
     def __init__(self, args: ModelArguments, commands: list[Command]):
