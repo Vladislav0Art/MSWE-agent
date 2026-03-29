@@ -282,12 +282,10 @@ class OpenAIModel(BaseModel):
                 api_version=keys_config.get("AZURE_OPENAI_API_VERSION", "2024-02-01"),
             )
         else:
-            api_base_url: str | None = keys_config.get("OPENAI_API_BASE_URL", None)
-            additional_headers = None
-
             use_grazie_proxy = keys_config.get("USE_GRAZIE_PROXY", False)
             # either boolean true or stringified "true"
             if (use_grazie_proxy is True) or (type(use_grazie_proxy) is str and use_grazie_proxy.lower() == "true"):
+                base_url = keys_config.get("GRAZIE_OPENAI_BASE_URL")
                 api_key = keys_config["GRAZIE_API_KEY"]
                 additional_headers = {
                     "Content-Type": "application/json",
@@ -296,14 +294,16 @@ class OpenAIModel(BaseModel):
                     "Grazie-Authenticate-JWT": api_key,
                 }
             else:
+                base_url = keys_config.get("OPENAI_API_BASE_URL", None)
                 api_key = keys_config["OPENAI_API_KEY"]
+                additional_headers = None
 
-            print(f"OpenAI API Base URL: {api_base_url}")
             print(f"Use Grazie: {use_grazie_proxy}")
+            print(f"OpenAI API URL: {base_url}")
 
             self.client = OpenAI(
                 api_key=api_key,
-                base_url=api_base_url,
+                base_url=base_url,
                 default_headers=additional_headers,
             )
 
@@ -416,9 +416,32 @@ class AnthropicModel(BaseModel):
 
     def __init__(self, args: ModelArguments, commands: list[Command]):
         super().__init__(args, commands)
+        use_grazie_proxy = keys_config.get("USE_GRAZIE_PROXY", False)
+        # either boolean true or stringified "true"
+        if (use_grazie_proxy is True) or (type(use_grazie_proxy) is str and use_grazie_proxy.lower() == "true"):
+            base_url = keys_config.get("GRAZIE_ANTHROPIC_BASE_URL")
+            api_key = keys_config["GRAZIE_API_KEY"]
+            additional_headers = {
+                "Content-Type": "application/json",
+                "Grazie-Agent": '{"name": "mswe-agent-run", "version": "test"}',
+                # use Grazie JWT token
+                "Grazie-Authenticate-JWT": api_key,
+            }
+        else:
+            base_url = keys_config.get("ANTHROPIC_BASE_URL", None)
+            api_key = keys_config["ANTHROPIC_API_KEY"]
+            additional_headers = None
+
+        print(f"Use Grazie: {use_grazie_proxy}")
+        print(f"Anthropic API URL: {base_url}")
 
         # Set Anthropic key
-        self.api = Anthropic(api_key=keys_config["ANTHROPIC_API_KEY"])
+        self.api = Anthropic(
+            api_key=api_key,
+            base_url=base_url,
+            default_headers=additional_headers,
+        )
+
 
     def history_to_messages(
         self,
@@ -631,6 +654,9 @@ def anthropic_query(model: AnthropicModel | BedrockModel, history: list[dict[str
         top_p=model.args.top_p,
         system=system_message,
     )
+    # TODO(Anthropic): support streaming responses because now it fails with:
+    #       "ValueError: Streaming is required for operations that may take longer than 10 minutes.
+    #       See https://github.com/anthropics/anthropic-sdk-python#long-requests for more details"
 
     # Calculate + update costs, return response
     model.update_stats(response.usage.input_tokens, response.usage.output_tokens)
