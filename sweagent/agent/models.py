@@ -606,6 +606,10 @@ def anthropic_history_to_messages(
     return compiled_messages
 
 
+# `anthropic_query` prints a warning when streaming is used, and top_p
+# is dropped in favor of temperature for Anthropic modern (4.6) streaming models
+ANTHROPIC_MODERN_MODELS_WARNING_PRINTED = False
+
 def anthropic_query(model: AnthropicModel | BedrockModel, history: list[dict[str, str]]) -> str:
     """
     Query the Anthropic API with the given `history` and return the response.
@@ -662,6 +666,7 @@ def anthropic_query(model: AnthropicModel | BedrockModel, history: list[dict[str
                   f"cannot both be specified for this model. top_p will be omitted in favor of temperature, "
                   f"for this and further requests.")
 
+        # See Anthropic Streaming API: https://platform.claude.com/docs/en/api/sdks/python#streaming-responses
         with model.api.messages.stream(
                 messages=messages,
                 max_tokens=max_tokens,
