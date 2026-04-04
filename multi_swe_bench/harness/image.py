@@ -70,7 +70,7 @@ class Image:
         return f"{self.image_name()}:{self.image_tag()}"
 
     def image_name(self) -> str:
-        raise NotImplementedError
+        return f"{self.pr.org}/{self.pr.repo}".lower()
 
     def image_tag(self) -> str:
         raise NotImplementedError
