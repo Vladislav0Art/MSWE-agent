@@ -10,3 +10,4 @@ from multi_swe_bench.harness.repos.java.ReactiveX import *
 from multi_swe_bench.harness.repos.java.spotbugs import *
 # newly added modules from multi_swe_bench
 from multi_swe_bench.harness.repos.java.fasterxml import *
+from multi_swe_bench.harness.repos.java.Graylog2 import *
