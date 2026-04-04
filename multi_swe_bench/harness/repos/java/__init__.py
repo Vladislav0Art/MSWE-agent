@@ -12,3 +12,4 @@ from multi_swe_bench.harness.repos.java.spotbugs import *
 from multi_swe_bench.harness.repos.java.fasterxml import *
 from multi_swe_bench.harness.repos.java.Graylog2 import *
 from multi_swe_bench.harness.repos.java.OpenRefine import *
+from multi_swe_bench.harness.repos.java.apache import *
