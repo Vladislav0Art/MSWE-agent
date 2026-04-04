@@ -645,22 +645,53 @@ def anthropic_query(model: AnthropicModel | BedrockModel, history: list[dict[str
     system_message = "\n".join([entry["content"] for entry in history if entry["role"] == "system"])
     messages = anthropic_history_to_messages(model, history)
 
-    # Perform Anthropic API call
-    response = model.api.messages.create(
-        messages=messages,
-        max_tokens=model.model_metadata["max_tokens"],
-        model=model.api_model,
-        temperature=model.args.temperature,
-        top_p=model.args.top_p,
-        system=system_message,
-    )
-    # TODO(Anthropic): support streaming responses because now it fails with:
-    #       "ValueError: Streaming is required for operations that may take longer than 10 minutes.
-    #       See https://github.com/anthropics/anthropic-sdk-python#long-requests for more details"
+    models_requiring_streaming = [
+        # newer models with high max tokens require streaming
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5-20251001",
+    ]
+    if model.api_model in models_requiring_streaming:
+        max_tokens = model.model_metadata["max_tokens"]
 
-    # Calculate + update costs, return response
-    model.update_stats(response.usage.input_tokens, response.usage.output_tokens)
-    return "\n".join([x.text for x in response.content])
+        global ANTHROPIC_MODERN_MODELS_WARNING_PRINTED
+        if not ANTHROPIC_MODERN_MODELS_WARNING_PRINTED:
+            ANTHROPIC_MODERN_MODELS_WARNING_PRINTED = True
+            print(f"Anthropic model '{model.api_model}' with max_tokens={max_tokens} requires streaming")
+            print(f"{model.api_model}: temperature={model.args.temperature} and top_p={model.args.top_p} "
+                  f"cannot both be specified for this model. top_p will be omitted in favor of temperature, "
+                  f"for this and further requests.")
+
+        with model.api.messages.stream(
+                messages=messages,
+                max_tokens=max_tokens,
+                model=model.api_model,
+                temperature=model.args.temperature,
+                # NOTE: top_p is omitted due to 400 Bad Request error:
+                # '`temperature` and `top_p` cannot both be specified for this model. Please use only one.'
+                # top_p=model.args.top_p,
+                system=system_message,
+        ) as stream:
+            text = stream.get_final_text()
+            message = stream.get_final_message()
+            usage = message.usage
+            # Calculate + update costs, return response
+            model.update_stats(input_tokens=usage.input_tokens, output_tokens=usage.output_tokens)
+            return text
+    else:
+        # Perform Anthropic API call
+        response = model.api.messages.create(
+            messages=messages,
+            max_tokens=model.model_metadata["max_tokens"],
+            model=model.api_model,
+            temperature=model.args.temperature,
+            top_p=model.args.top_p,
+            system=system_message,
+        )
+
+        # Calculate + update costs, return response
+        model.update_stats(response.usage.input_tokens, response.usage.output_tokens)
+        return "\n".join([x.text for x in response.content])
 
 
 class OllamaModel(BaseModel):
