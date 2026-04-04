@@ -15,3 +15,4 @@ from multi_swe_bench.harness.repos.java.OpenRefine import *
 from multi_swe_bench.harness.repos.java.apache import *
 from multi_swe_bench.harness.repos.java.google import *
 from multi_swe_bench.harness.repos.java.googlecontainertools import *
+from multi_swe_bench.harness.repos.java.micronautprojects import *
