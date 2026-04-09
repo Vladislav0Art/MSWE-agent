@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 import together
 from anthropic import AI_PROMPT, HUMAN_PROMPT, Anthropic, AnthropicBedrock
-from openai import AzureOpenAI, BadRequestError, OpenAI, DefaultHttpxClient
+from openai import AzureOpenAI, BadRequestError
 from simple_parsing.helpers.serialization.serializable import FrozenSerializable, Serializable
 from tenacity import (
     retry,
@@ -21,7 +21,9 @@ from tenacity import (
 
 from sweagent.agent.commands import Command
 from sweagent.utils.config import keys_config
+from sweagent.utils.langfuse.setup import configure_langfuse
 from sweagent.utils.log import get_logger
+from sweagent.utils.other import is_true
 
 logger = get_logger("api_models")
 
@@ -40,6 +42,8 @@ class ModelArguments(FrozenSerializable):
     temperature: float = 1.0
     # Sampling top-p
     top_p: float = 1.0
+    # Reasoning Effort (see: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
+    reasoning_effort: str | None = None
     # Path to replay file when using the replay model
     replay_path: str | None = None
     # Host URL when using Ollama model
@@ -283,29 +287,60 @@ class OpenAIModel(BaseModel):
             )
         else:
             use_grazie_proxy = keys_config.get("USE_GRAZIE_PROXY", False)
-            # either boolean true or stringified "true"
-            if (use_grazie_proxy is True) or (type(use_grazie_proxy) is str and use_grazie_proxy.lower() == "true"):
+            use_litellm_proxy = keys_config.get("USE_LITELLM_PROXY", False)
+
+            if is_true(use_grazie_proxy):
+                print(f"Using Grazie for inference")
                 base_url = keys_config.get("GRAZIE_OPENAI_BASE_URL")
-                api_key = keys_config["GRAZIE_API_KEY"]
+                api_key = keys_config.get("GRAZIE_API_KEY")
                 additional_headers = {
                     "Content-Type": "application/json",
                     "Grazie-Agent": '{"name": "mswe-agent-run", "version": "test"}',
                     # use Grazie JWT token
                     "Grazie-Authenticate-JWT": api_key,
                 }
+            elif is_true(use_litellm_proxy):
+                print(f"Using LiteLLM for inference")
+                base_url = keys_config.get("LITELLM_OPENAI_BASE_URL")
+                api_key = keys_config.get("LITELLM_API_KEY")
+                additional_headers = None
             else:
+                print(f"Using plain OpenAI endpoint for inference")
                 base_url = keys_config.get("OPENAI_API_BASE_URL", None)
                 api_key = keys_config["OPENAI_API_KEY"]
                 additional_headers = None
 
-            print(f"Use Grazie: {use_grazie_proxy}")
-            print(f"OpenAI API URL: {base_url}")
+            print(f"Selected OpenAI API URL: {base_url}")
 
-            self.client = OpenAI(
-                api_key=api_key,
+            self.client = self._create_openai_client(
                 base_url=base_url,
-                default_headers=additional_headers,
+                api_key=api_key,
+                additional_headers=additional_headers,
             )
+
+    def _create_openai_client(
+        self,
+        base_url: str | None,
+        api_key: str,
+        additional_headers: dict[str, str] | None,
+    ):
+        """Create an OpenAI client with the specified configuration (either traced to Langfuse or plain)."""
+        trace_to_langfuse = keys_config.get("TRACE_TO_LANGFUSE", None)
+        if is_true(trace_to_langfuse):
+            print("Tracing to Langfuse (make sure Langfuse ENVs are present: LANGFUSE_HOST, LANGFUSE_SECRET_KEY, LANGFUSE_PUBLIC_KEY")
+            from langfuse.openai import openai
+            configure_langfuse()
+        else:
+            print("Tracing disabled (use TRACE_TO_LANGFUSE to trace to Langfuse)")
+            import openai
+
+        # install omit
+        self.omit = openai.omit
+        return openai.OpenAI(
+            base_url=base_url,
+            api_key=api_key,
+            default_headers=additional_headers,
+        )
 
     def history_to_messages(
         self,
@@ -334,13 +369,16 @@ class OpenAIModel(BaseModel):
         """
         try:
             # Perform OpenAI API call
+            # WARNING: unconditionally drop `top_p` parameter in favor of `temperature`
             response = self.client.chat.completions.create(
                 messages=self.history_to_messages(history),
                 model=self.api_model,
                 temperature=self.args.temperature,
-                top_p=self.args.top_p,
+                top_p=self.omit, #  <- instead of `self.args.top_p`
+                reasoning_effort=self.args.reasoning_effort if self.args.reasoning_effort else self.omit,
             )
-        except BadRequestError:
+        except BadRequestError as err:
+            print(f"Error requesting OpenAI: {err}")
             msg = f"Context window ({self.model_metadata['max_context']} tokens) exceeded"
             raise CostLimitExceededError(msg)
         # Calculate + update costs, return response
