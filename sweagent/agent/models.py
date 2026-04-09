@@ -376,6 +376,13 @@ class OpenAIModel(BaseModel):
                 temperature=self.args.temperature,
                 top_p=self.omit, #  <- instead of `self.args.top_p`
                 reasoning_effort=self.args.reasoning_effort if self.args.reasoning_effort else self.omit,
+                extra_body={
+                    "cache": {
+                        # Skip cache check, get fresh response
+                        # See: https://docs.litellm.ai/docs/proxy/caching#no-cache
+                        "no-cache": True
+                    }
+                }
             )
         except BadRequestError as err:
             print(f"Error requesting OpenAI: {err}")
