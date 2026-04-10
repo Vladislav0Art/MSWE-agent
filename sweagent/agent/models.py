@@ -56,6 +56,7 @@ class APIStats(Serializable):
     instance_cost: float = 0
     tokens_sent: int = 0
     tokens_received: int = 0
+    reasoning_tokens_total: int = 0
     api_calls: int = 0
 
     def __add__(self, other):
@@ -128,7 +129,7 @@ class BaseModel:
         else:
             self.stats = other
 
-    def update_stats(self, input_tokens: int, output_tokens: int) -> float:
+    def update_stats(self, input_tokens: int, output_tokens: int, reasoning_tokens: int = 0) -> float:
         """
         Calculates the cost of a response from the openai API.
 
@@ -148,18 +149,21 @@ class BaseModel:
         self.stats.instance_cost += cost
         self.stats.tokens_sent += input_tokens
         self.stats.tokens_received += output_tokens
+        self.stats.reasoning_tokens_total += reasoning_tokens
         self.stats.api_calls += 1
 
         # Log updated cost values to std. out.
         logger.info(
             f"input_tokens={input_tokens:,}, "
             f"output_tokens={output_tokens:,}, "
+            f"reasoning_tokens={reasoning_tokens:,}, "
             f"instance_cost={self.stats.instance_cost:.2f}, "
             f"cost={cost:.2f}",
         )
         logger.info(
             f"total_tokens_sent={self.stats.tokens_sent:,}, "
             f"total_tokens_received={self.stats.tokens_received:,}, "
+            f"total_reasoning_tokens={self.stats.reasoning_tokens_total:,}, "
             f"total_cost={self.stats.total_cost:.2f}, "
             f"total_api_calls={self.stats.api_calls:,}",
         )
@@ -391,7 +395,8 @@ class OpenAIModel(BaseModel):
         # Calculate + update costs, return response
         input_tokens = response.usage.prompt_tokens
         output_tokens = response.usage.completion_tokens
-        self.update_stats(input_tokens, output_tokens)
+        reasoning_tokens = response.usage.completion_tokens_details.reasoning_tokens
+        self.update_stats(input_tokens, output_tokens, reasoning_tokens)
         return response.choices[0].message.content
 
 
