@@ -5,6 +5,7 @@ from typing import Optional, Union
 from multi_swe_bench.harness.image import Config, File, Image
 from multi_swe_bench.harness.instance import Instance, TestResult
 from multi_swe_bench.harness.pull_request import PullRequest
+from multi_swe_bench.harness.metamorphic import Metamorphic
 
 
 class ImageDefault(Image):
@@ -205,11 +206,18 @@ RUN git clone https://github.com/fasterxml/jackson-core.git /home/jackson-core
 WORKDIR /home/jackson-core
 RUN git reset --hard
 RUN git checkout {pr.base.sha}
+
+# apply metamorphic patch (if present)
+{metamorphic_patch_cmd}
 """
         dockerfile_content += f"""
-{copy_commands}
+{{copy_commands}}
 """
-        return dockerfile_content.format(pr=self.pr)
+        return dockerfile_content.format(
+            pr=self.pr,
+            metamorphic_patch_cmd=Metamorphic.apply_metamorphic_patch_cmd(pr=self.pr),
+            copy_commands=copy_commands,
+        )
 
 
 @Instance.register("fasterxml", "jackson_core_1178_to_1171")
