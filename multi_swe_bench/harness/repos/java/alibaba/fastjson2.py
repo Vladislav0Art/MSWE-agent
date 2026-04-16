@@ -4,6 +4,7 @@ from typing import Optional, Union
 from multi_swe_bench.harness.image import Config, File, Image
 from multi_swe_bench.harness.instance import Instance, TestResult
 from multi_swe_bench.harness.pull_request import PullRequest
+from multi_swe_bench.harness.metamorphic import Metamorphic
 
 
 class Fastjson2ImageBase(Image):
@@ -129,10 +130,10 @@ exit 0
             File(
                 ".",
                 "prepare.sh",
-                """#!/bin/bash
+                f"""#!/bin/bash
 set -e
 
-cd /home/{pr.repo}
+cd /home/{self.pr.repo}
 git config core.autocrlf input
 git config core.filemode false
 echo ".gitattributes" >> .git/info/exclude
@@ -142,14 +143,16 @@ echo "*.jpg binary" >> .gitattributes
 git add .
 git reset --hard
 bash /home/check_git_changes.sh
-git checkout {pr.base.sha}
+git checkout {self.pr.base.sha}
+
+# apply metamorphic patch (if present)
+{Metamorphic.apply_metamorphic_patch_cmd(pr=self.pr)}
+
 bash /home/check_git_changes.sh
 
 ./mvnw -V --no-transfer-progress -Pgen-javadoc -Pgen-dokka clean package -Dsurefire.useFile=false -Dmaven.test.skip=false -DfailIfNoTests=false || true
 
-""".format(
-                    pr=self.pr
-                ),
+"""
             ),
             File(
                 ".",
