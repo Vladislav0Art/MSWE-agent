@@ -129,6 +129,10 @@ class Base:
     # Metamorphic transformation applied on the base commit (i.e., this `sha`).
     # This patch is expected to be applied within the `prepare.sh` script of a given Instance, if present.
     metamorphic_base_patch: str | None = None
+    # Name of the metamorphic dataset variant (e.g. "_test", "s1-renaming"). When set, used as a
+    # prefix for instance Docker image tags so that different datasets produce distinct images.
+    # Absent in original Multi-SWE-Bench datasets (s0-original, s3-problem-statement).
+    strategy: str | None = None
 
     def __post_init__(self):
         if not isinstance(self.label, str):
@@ -139,6 +143,10 @@ class Base:
             raise ValueError(f"Invalid sha: {self.sha}")
         if self.metamorphic_base_patch is not None and not isinstance(self.metamorphic_base_patch, str):
             raise ValueError(f"Invalid metamorphic_base_patch: {self.metamorphic_base_patch}")
+        if self.strategy is not None and not isinstance(self.strategy, str):
+            raise ValueError(f"Invalid strategy: {self.strategy}")
+
+        print(f"Base: strategy=`{self.strategy}`, metamorphic_base_patch=`{self.metamorphic_base_patch[:30]}`")
 
     @classmethod
     def from_dict(cls, d: dict) -> "Base":
