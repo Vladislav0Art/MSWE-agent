@@ -146,7 +146,8 @@ class Base:
         if self.strategy is not None and not isinstance(self.strategy, str):
             raise ValueError(f"Invalid strategy: {self.strategy}")
 
-        print(f"Base: strategy=`{self.strategy}`, metamorphic_base_patch=`{self.metamorphic_base_patch[:30]}`")
+        patch_excerpt = self.metamorphic_base_patch[:30] if self.metamorphic_base_patch else '[empty]'
+        print(f"Base: strategy=`{self.strategy}`, metamorphic_base_patch=`{patch_excerpt}`")
 
     @classmethod
     def from_dict(cls, d: dict) -> "Base":
