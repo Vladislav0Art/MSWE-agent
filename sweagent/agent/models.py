@@ -723,6 +723,22 @@ def anthropic_query(model: AnthropicModel | BedrockModel, history: list[dict[str
         "claude-sonnet-4-6",
         "claude-haiku-4-5-20251001",
     ]
+
+    # Adaptive thinking + effort. The same set of modern models support
+    # `thinking={"type": "adaptive"}` and `output_config.effort` (GA, no beta header).
+    # `effort` values (low/medium/high) map 1:1 to OpenAI's `reasoning_effort`.
+    # See https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking
+    #     https://platform.claude.com/docs/en/build-with-claude/effort
+    reasoning_kwargs: dict = {}
+    if model.args.reasoning_effort and model.api_model in models_requiring_streaming:
+        thinking_cfg: dict = {"type": "adaptive"}
+        # Opus 4.7 omits thinking content by default; opt back in to summarized so
+        # any logging/inspection of `message.content` still sees thinking blocks.
+        if model.api_model == "claude-opus-4-7":
+            thinking_cfg["display"] = "summarized"
+        reasoning_kwargs["thinking"] = thinking_cfg
+        reasoning_kwargs["output_config"] = {"effort": model.args.reasoning_effort}
+
     if model.api_model in models_requiring_streaming:
         max_tokens = model.model_metadata["max_tokens"]
 
@@ -733,6 +749,8 @@ def anthropic_query(model: AnthropicModel | BedrockModel, history: list[dict[str
             print(f"{model.api_model}: temperature={model.args.temperature} and top_p={model.args.top_p} "
                   f"cannot both be specified for this model. top_p will be omitted in favor of temperature, "
                   f"for this and further requests.")
+            if reasoning_kwargs:
+                print(f"{model.api_model}: adaptive thinking enabled with effort='{model.args.reasoning_effort}'.")
 
         # See Anthropic Streaming API: https://platform.claude.com/docs/en/api/sdks/python#streaming-responses
         with model.api.messages.stream(
@@ -745,12 +763,27 @@ def anthropic_query(model: AnthropicModel | BedrockModel, history: list[dict[str
                 # top_p=model.args.top_p,
                 system=system_message,
                 extra_body=extra_body,
+                **reasoning_kwargs,
         ) as stream:
             text = stream.get_final_text()
             message = stream.get_final_message()
             usage = message.usage
-            # Calculate + update costs, return response
-            model.update_stats(input_tokens=usage.input_tokens, output_tokens=usage.output_tokens)
+            # Anthropic does not expose reasoning_tokens as a separate usage field —
+            # thinking tokens are billed as part of `output_tokens` (so cost is correct).
+            # Estimate reasoning_tokens from the textual length of any thinking blocks
+            # in `message.content` so the dedicated counter still has signal. ~4 chars/token
+            # is the standard rule of thumb; exact count would require an extra API call.
+            reasoning_chars = sum(
+                len(getattr(b, "thinking", "") or "")
+                for b in message.content
+                if getattr(b, "type", None) == "thinking"
+            )
+            reasoning_tokens = reasoning_chars // 4
+            model.update_stats(
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                reasoning_tokens=reasoning_tokens,
+            )
             return text
     else:
         # Perform Anthropic API call
@@ -762,11 +795,21 @@ def anthropic_query(model: AnthropicModel | BedrockModel, history: list[dict[str
             top_p=model.args.top_p,
             system=system_message,
             extra_body=extra_body,
+            **reasoning_kwargs,
         )
 
         # Calculate + update costs, return response
-        model.update_stats(response.usage.input_tokens, response.usage.output_tokens)
-        return "\n".join([x.text for x in response.content])
+        reasoning_chars = sum(
+            len(getattr(b, "thinking", "") or "")
+            for b in response.content
+            if getattr(b, "type", None) == "thinking"
+        )
+        model.update_stats(
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            reasoning_chars // 4,
+        )
+        return "\n".join([x.text for x in response.content if getattr(x, "type", None) == "text"])
 
 
 class OllamaModel(BaseModel):
