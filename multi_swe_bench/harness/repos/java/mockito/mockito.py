@@ -4,6 +4,7 @@ from typing import Optional, Union
 from multi_swe_bench.harness.image import Config, File, Image
 from multi_swe_bench.harness.instance import Instance, TestResult
 from multi_swe_bench.harness.pull_request import PullRequest
+from multi_swe_bench.harness.metamorphic import Metamorphic
 
 
 class MockitoImageBase(Image):
@@ -159,27 +160,26 @@ fi
 echo "check_git_changes: No uncommitted changes"
 exit 0
 
-""".format(
-                    pr=self.pr
-                ),
-            ),
+""".format(pr=self.pr)),
             File(
                 ".",
                 "prepare.sh",
-                """#!/bin/bash
+                f"""#!/bin/bash
 set -e
 
-cd /home/{pr.repo}
+cd /home/{self.pr.repo}
 git reset --hard
 bash /home/check_git_changes.sh
-git checkout {pr.base.sha}
+git checkout {self.pr.base.sha}
+
+# apply metamorphic patch (if present)
+{Metamorphic.apply_metamorphic_patch_cmd(pr=self.pr)}
+
 bash /home/check_git_changes.sh
 
 ./gradlew build || true
 
-""".format(
-                    pr=self.pr
-                ),
+""",
             ),
             File(
                 ".",

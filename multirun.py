@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import logging
 
+from langfuse.types import TraceContext
+
 from sweagent import CONFIG_DIR
+from sweagent.utils.langfuse.setup import get_langfuse_client_if_enabled
 from sweagent.utils.log import get_logger
 
 try:
@@ -307,6 +310,10 @@ class OpenPRHook(MainHook):
         return True
 
 
+
+langfuse = get_langfuse_client_if_enabled()
+
+
 class Main:
     def __init__(self, args: ScriptArguments, filter_instance: str):
         if args.print_config:
@@ -522,12 +529,23 @@ def get_args(args=None) -> ScriptArguments:
         description=Markdown(__doc__),
     )
 
-def run_single(scripts, instance):
-    import os, copy
+def run_single(scripts, instance, parent_trace_context: TraceContext | None = None):
+    import copy
     try:
         copy_args = copy.deepcopy(scripts)
         handler = Main(copy_args, instance)
-        handler.main()
+
+        # if langfuse enabled, wrap the entire execution into a span
+        if langfuse and parent_trace_context:
+            with langfuse.start_as_current_observation(
+                    trace_context=parent_trace_context, as_type="span", name=f"{instance}"):
+                handler.main()
+        elif langfuse:
+            with langfuse.start_as_current_observation(as_type="span", name=f"{instance}"):
+                handler.main()
+        else:
+            handler.main()
+
     except _ContinueLoop:
         logger.info('instance skipped.')
         return
@@ -557,14 +575,27 @@ def main(args: ScriptArguments):
         formatter_class=RichHelpFormatter,
         description=Markdown(__doc__),
     )
-    
-    futures = [executer.submit(run_single, post_args, i) for i in instance_ids]
 
-    for future in futures:
-        try:
-            future.result()
-        except Exception as e:
-            raise e
+    if langfuse:
+        filename = args.environment.cli_args.pr_file.name
+        with langfuse.start_as_current_observation(as_type="span", name=f"multirun-{filename}") as span:
+            parent_content = TraceContext(
+                trace_id=span.trace_id,
+                parent_span_id=span.id,
+            )
+            futures = [executer.submit(run_single, post_args, i, parent_content) for i in instance_ids]
+            for future in futures:
+                try:
+                    future.result()
+                except Exception as e:
+                    raise e
+    else:
+        futures = [executer.submit(run_single, post_args, i) for i in instance_ids]
+        for future in futures:
+            try:
+                future.result()
+            except Exception as e:
+                raise e
 
 
 if __name__ == "__main__":

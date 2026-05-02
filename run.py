@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from sweagent import CONFIG_DIR
+from sweagent.utils.langfuse.setup import get_langfuse_client_if_enabled
 from sweagent.utils.log import get_logger
 
 try:
@@ -305,6 +306,8 @@ class OpenPRHook(MainHook):
         return True
 
 
+langfuse = get_langfuse_client_if_enabled()
+
 class Main:
     def __init__(self, args: ScriptArguments):
         if args.print_config:
@@ -372,8 +375,15 @@ class Main:
         for hook in self.hooks:
             hook.on_start()
         for instance_id in self.env.data.keys():
+
             try:
-                self.run(instance_id)
+                # if langfuse enabled, wrap the entire execution into a span
+                if langfuse:
+                    with langfuse.start_as_current_observation(as_type="span", name=f"{instance_id}"):
+                        self.run(instance_id)
+                else:
+                    self.run(instance_id)
+
             except _ContinueLoop:
                 continue
             except KeyboardInterrupt:
@@ -513,9 +523,13 @@ def get_args(args=None) -> ScriptArguments:
         description=Markdown(__doc__),
     )
 
-
 def main(args: ScriptArguments):
-    Main(args).main()
+    if langfuse:
+        filename = args.environment.cli_args.pr_file.name
+        with langfuse.start_as_current_observation(as_type="span", name=f"run-{filename}"):
+            Main(args).main()
+    else:
+        Main(args).main()
 
 
 if __name__ == "__main__":

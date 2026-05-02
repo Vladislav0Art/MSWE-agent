@@ -7,9 +7,10 @@ from collections import defaultdict
 from dataclasses import dataclass, fields
 from pathlib import Path
 
+import httpx
 import together
 from anthropic import AI_PROMPT, HUMAN_PROMPT, Anthropic, AnthropicBedrock
-from openai import AzureOpenAI, BadRequestError, OpenAI
+from openai import AzureOpenAI, BadRequestError
 from simple_parsing.helpers.serialization.serializable import FrozenSerializable, Serializable
 from tenacity import (
     retry,
@@ -20,7 +21,9 @@ from tenacity import (
 
 from sweagent.agent.commands import Command
 from sweagent.utils.config import keys_config
+from sweagent.utils.langfuse.setup import configure_langfuse
 from sweagent.utils.log import get_logger
+from sweagent.utils.other import is_true
 
 logger = get_logger("api_models")
 
@@ -39,6 +42,8 @@ class ModelArguments(FrozenSerializable):
     temperature: float = 1.0
     # Sampling top-p
     top_p: float = 1.0
+    # Reasoning Effort (see: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
+    reasoning_effort: str | None = None
     # Path to replay file when using the replay model
     replay_path: str | None = None
     # Host URL when using Ollama model
@@ -51,6 +56,7 @@ class APIStats(Serializable):
     instance_cost: float = 0
     tokens_sent: int = 0
     tokens_received: int = 0
+    reasoning_tokens_total: int = 0
     api_calls: int = 0
 
     def __add__(self, other):
@@ -123,7 +129,7 @@ class BaseModel:
         else:
             self.stats = other
 
-    def update_stats(self, input_tokens: int, output_tokens: int) -> float:
+    def update_stats(self, input_tokens: int, output_tokens: int, reasoning_tokens: int = 0) -> float:
         """
         Calculates the cost of a response from the openai API.
 
@@ -143,18 +149,21 @@ class BaseModel:
         self.stats.instance_cost += cost
         self.stats.tokens_sent += input_tokens
         self.stats.tokens_received += output_tokens
+        self.stats.reasoning_tokens_total += reasoning_tokens
         self.stats.api_calls += 1
 
         # Log updated cost values to std. out.
         logger.info(
             f"input_tokens={input_tokens:,}, "
             f"output_tokens={output_tokens:,}, "
+            f"reasoning_tokens={reasoning_tokens:,}, "
             f"instance_cost={self.stats.instance_cost:.2f}, "
             f"cost={cost:.2f}",
         )
         logger.info(
             f"total_tokens_sent={self.stats.tokens_sent:,}, "
             f"total_tokens_received={self.stats.tokens_received:,}, "
+            f"total_reasoning_tokens={self.stats.reasoning_tokens_total:,}, "
             f"total_cost={self.stats.total_cost:.2f}, "
             f"total_api_calls={self.stats.api_calls:,}",
         )
@@ -223,6 +232,32 @@ class OpenAIModel(BaseModel):
             "cost_per_input_token": 5e-06,
             "cost_per_output_token": 15e-06,
         },
+
+        # adding newer modern OpenAI models
+        # GPT-5.2: https://developers.openai.com/api/docs/models/gpt-5.2
+        "gpt-5.2-2025-12-11": {
+            "max_context": 400_000,
+            "cost_per_input_token": 1.75e-6, # 1.75 / 1_000_000
+            "cost_per_output_token": 1.4e-5, # 14 / 1_000_000
+        },
+        # GPT-5.4: https://developers.openai.com/api/docs/models/gpt-5.4
+        "gpt-5.4-2026-03-05": {
+            "max_context": 1_050_000,
+            "cost_per_input_token": 2.5e-6, # 2.50 / 1_000_000
+            "cost_per_output_token": 1.5e-5, # 15 / 1_000_000
+        },
+        # GPT-5.4 mini: https://developers.openai.com/api/docs/models/gpt-5.4-mini
+        "gpt-5.4-mini-2026-03-17": {
+            "max_context": 400_000,
+            "cost_per_input_token": 7.5e-7, # 0.75 / 1_000_000
+            "cost_per_output_token": 4.5e-6, # 4.50 / 1_000_000
+        },
+        # GPT-5.3-Codex: https://developers.openai.com/api/docs/models/gpt-5.3-codex
+        "gpt-5.3-codex": {
+            "max_context": 400_000,
+            "cost_per_input_token": 1.75e-6, # 1.75 / 1_000_000
+            "cost_per_output_token": 1.4e-5, # 14 / 1_000_000
+        },
     }
 
     SHORTCUTS = {
@@ -234,6 +269,10 @@ class OpenAIModel(BaseModel):
         "gpt3-0125": "gpt-3.5-turbo-0125",
         "gpt4-turbo": "gpt-4-turbo-2024-04-09",
         "gpt4o": "gpt-4o-2024-05-13",
+        # newer GPT-5 models
+        "gpt5.2": "gpt-5.2-2025-12-11",
+        "gpt5.4": "gpt-5.4-2026-03-05",
+        "gpt5.4-mini": "gpt-5.4-mini-2026-03-17",
     }
 
     def __init__(self, args: ModelArguments, commands: list[Command]):
@@ -251,8 +290,61 @@ class OpenAIModel(BaseModel):
                 api_version=keys_config.get("AZURE_OPENAI_API_VERSION", "2024-02-01"),
             )
         else:
-            api_base_url: str | None = keys_config.get("OPENAI_API_BASE_URL", None)
-            self.client = OpenAI(api_key=keys_config["OPENAI_API_KEY"], base_url=api_base_url)
+            use_grazie_proxy = keys_config.get("USE_GRAZIE_PROXY", False)
+            use_litellm_proxy = keys_config.get("USE_LITELLM_PROXY", False)
+
+            if is_true(use_grazie_proxy):
+                print(f"Using Grazie for inference")
+                base_url = keys_config.get("GRAZIE_OPENAI_BASE_URL")
+                api_key = keys_config.get("GRAZIE_API_KEY")
+                additional_headers = {
+                    "Content-Type": "application/json",
+                    "Grazie-Agent": '{"name": "mswe-agent-run", "version": "test"}',
+                    # use Grazie JWT token
+                    "Grazie-Authenticate-JWT": api_key,
+                }
+            elif is_true(use_litellm_proxy):
+                print(f"Using LiteLLM for inference")
+                base_url = keys_config.get("LITELLM_OPENAI_BASE_URL")
+                api_key = keys_config.get("LITELLM_API_KEY")
+                additional_headers = None
+            else:
+                print(f"Using plain OpenAI endpoint for inference")
+                base_url = keys_config.get("OPENAI_API_BASE_URL", None)
+                api_key = keys_config["OPENAI_API_KEY"]
+                additional_headers = None
+
+            print(f"Selected OpenAI API URL: {base_url}")
+
+            self.client = self._create_openai_client(
+                base_url=base_url,
+                api_key=api_key,
+                additional_headers=additional_headers,
+            )
+
+    def _create_openai_client(
+        self,
+        base_url: str | None,
+        api_key: str,
+        additional_headers: dict[str, str] | None,
+    ):
+        """Create an OpenAI client with the specified configuration (either traced to Langfuse or plain)."""
+        trace_to_langfuse = keys_config.get("TRACE_TO_LANGFUSE", None)
+        if is_true(trace_to_langfuse):
+            print("Tracing to Langfuse (make sure Langfuse ENVs are present: LANGFUSE_HOST, LANGFUSE_SECRET_KEY, LANGFUSE_PUBLIC_KEY")
+            from langfuse.openai import openai
+            configure_langfuse()
+        else:
+            print("Tracing disabled (use TRACE_TO_LANGFUSE to trace to Langfuse)")
+            import openai
+
+        # install omit
+        self.omit = openai.omit
+        return openai.OpenAI(
+            base_url=base_url,
+            api_key=api_key,
+            default_headers=additional_headers,
+        )
 
     def history_to_messages(
         self,
@@ -281,19 +373,30 @@ class OpenAIModel(BaseModel):
         """
         try:
             # Perform OpenAI API call
+            # WARNING: unconditionally drop `top_p` parameter in favor of `temperature`
             response = self.client.chat.completions.create(
                 messages=self.history_to_messages(history),
                 model=self.api_model,
                 temperature=self.args.temperature,
-                top_p=self.args.top_p,
+                top_p=self.omit, #  <- instead of `self.args.top_p`
+                reasoning_effort=self.args.reasoning_effort if self.args.reasoning_effort else self.omit,
+                extra_body={
+                    "cache": {
+                        # Skip cache check, get fresh response
+                        # See: https://docs.litellm.ai/docs/proxy/caching#no-cache
+                        "no-cache": True
+                    }
+                }
             )
-        except BadRequestError:
+        except BadRequestError as err:
+            print(f"Error requesting OpenAI: {err}")
             msg = f"Context window ({self.model_metadata['max_context']} tokens) exceeded"
             raise CostLimitExceededError(msg)
         # Calculate + update costs, return response
         input_tokens = response.usage.prompt_tokens
         output_tokens = response.usage.completion_tokens
-        self.update_stats(input_tokens, output_tokens)
+        reasoning_tokens = response.usage.completion_tokens_details.reasoning_tokens
+        self.update_stats(input_tokens, output_tokens, reasoning_tokens)
         return response.choices[0].message.content
 
 
@@ -332,20 +435,73 @@ class AnthropicModel(BaseModel):
             "cost_per_input_token": 2.5e-07,
             "cost_per_output_token": 1.25e-06,
         },
+
+        # newer Claude models: https://platform.claude.com/docs/en/about-claude/models/overview
+        "claude-opus-4-6": {
+            "max_context": 1_000_000,
+            "max_tokens": 128_000,
+            "cost_per_input_token": 5.0e-6, # 5 / 1_000_000
+            "cost_per_output_token": 2.5e-5, # 25 / 1_000_000
+        },
+        "claude-sonnet-4-6": {
+            "max_context": 1_000_000,
+            "max_tokens": 64_000,
+            "cost_per_input_token": 3.0e-6, # 3 / 1_000_000
+            "cost_per_output_token": 1.5e-5, # 15 / 1_000_000
+        },
+        "claude-haiku-4-5-20251001": {
+            "max_context": 200_000,
+            "max_tokens": 64_000,
+            "cost_per_input_token": 1.0e-6, # 1 / 1_000_000
+            "cost_per_output_token": 5.0e-6, # 5 / 1_000_000
+        },
     }
 
     SHORTCUTS = {
         "claude-2": "claude-2.1",
-        "claude-opus": "claude-3-opus-20240229",
-        "claude-sonnet": "claude-3-sonnet-20240229",
-        "claude-haiku": "claude-3-haiku-20240307",
+        "claude-opus": "claude-opus-4-6",
+        "claude-sonnet": "claude-sonnet-4-6",
+        "claude-haiku": "claude-haiku-4-5-20251001",
     }
 
     def __init__(self, args: ModelArguments, commands: list[Command]):
         super().__init__(args, commands)
 
-        # Set Anthropic key
-        self.api = Anthropic(api_key=keys_config["ANTHROPIC_API_KEY"])
+        use_grazie_proxy = keys_config.get("USE_GRAZIE_PROXY", False)
+        use_litellm_proxy = keys_config.get("USE_LITELLM_PROXY", False)
+
+        if is_true(use_grazie_proxy):
+            print("Using Grazie for inference")
+            base_url = keys_config.get("GRAZIE_ANTHROPIC_BASE_URL")
+            api_key = keys_config["GRAZIE_API_KEY"]
+            additional_headers = {
+                "Content-Type": "application/json",
+                "Grazie-Agent": '{"name": "mswe-agent-run", "version": "test"}',
+                # use Grazie JWT token
+                "Grazie-Authenticate-JWT": api_key,
+            }
+            self.use_litellm_proxy = False
+        elif is_true(use_litellm_proxy):
+            print("Using LiteLLM for inference")
+            base_url = keys_config.get("LITELLM_ANTHROPIC_BASE_URL")
+            api_key = keys_config.get("LITELLM_API_KEY")
+            additional_headers = None
+            self.use_litellm_proxy = True
+        else:
+            print("Using plain Anthropic endpoint for inference")
+            base_url = keys_config.get("ANTHROPIC_BASE_URL", None)
+            api_key = keys_config["ANTHROPIC_API_KEY"]
+            additional_headers = None
+            self.use_litellm_proxy = False
+
+        print(f"Selected Anthropic API URL: {base_url}")
+
+        self.api = Anthropic(
+            api_key=api_key,
+            base_url=base_url,
+            default_headers=additional_headers,
+        )
+
 
     def history_to_messages(
         self,
@@ -510,6 +666,43 @@ def anthropic_history_to_messages(
     return compiled_messages
 
 
+# `anthropic_query` prints a warning when streaming is used, and top_p
+# is dropped in favor of temperature for Anthropic modern (4.6) streaming models
+ANTHROPIC_MODERN_MODELS_WARNING_PRINTED = False
+
+
+def _count_anthropic_thinking_tokens(model: "AnthropicModel | BedrockModel", content) -> int:
+    """Exact thinking-token count via the Anthropic `messages.count_tokens` endpoint.
+
+    Anthropic's `usage` object does not expose reasoning tokens separately (they're
+    folded into `output_tokens`). To populate the dedicated `reasoning_tokens` counter
+    with an exact value we re-tokenize the concatenated thinking-block text via
+    `POST /v1/messages/count_tokens` (free of charge; one extra round-trip per query).
+
+    Returns 0 when there is no thinking content, when the model API has no
+    `count_tokens` helper (e.g. `AnthropicBedrock`), or when the call fails.
+    """
+    thinking_text = "".join(
+        getattr(b, "thinking", "") or ""
+        for b in content
+        if getattr(b, "type", None) == "thinking"
+    )
+    if not thinking_text:
+        return 0
+    if not isinstance(model, AnthropicModel):
+        # AnthropicBedrock has no count_tokens helper (see anthropic-sdk-python#353).
+        return 0
+    try:
+        result = model.api.messages.count_tokens(
+            model=model.api_model,
+            messages=[{"role": "user", "content": thinking_text}],
+        )
+        return result.input_tokens
+    except Exception as err:
+        logger.warning(f"Failed to count Anthropic thinking tokens: {err}")
+        return 0
+
+
 def anthropic_query(model: AnthropicModel | BedrockModel, history: list[dict[str, str]]) -> str:
     """
     Query the Anthropic API with the given `history` and return the response.
@@ -549,19 +742,96 @@ def anthropic_query(model: AnthropicModel | BedrockModel, history: list[dict[str
     system_message = "\n".join([entry["content"] for entry in history if entry["role"] == "system"])
     messages = anthropic_history_to_messages(model, history)
 
-    # Perform Anthropic API call
-    response = model.api.messages.create(
-        messages=messages,
-        max_tokens=model.model_metadata["max_tokens"],
-        model=model.api_model,
-        temperature=model.args.temperature,
-        top_p=model.args.top_p,
-        system=system_message,
+    # When routing through the LiteLLM proxy, bypass its response cache so we
+    # always get a fresh completion. See https://docs.litellm.ai/docs/proxy/caching#no-cache
+    extra_body = (
+        {"cache": {"no-cache": True}}
+        if isinstance(model, AnthropicModel) and getattr(model, "use_litellm_proxy", False)
+        else None
     )
 
-    # Calculate + update costs, return response
-    model.update_stats(response.usage.input_tokens, response.usage.output_tokens)
-    return "\n".join([x.text for x in response.content])
+    models_requiring_streaming = [
+        # newer models with high max tokens require streaming
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5-20251001",
+    ]
+
+    # Adaptive thinking + effort. The same set of modern models support
+    # `thinking={"type": "adaptive"}` and `output_config.effort` (GA, no beta header).
+    # `effort` values (low/medium/high) map 1:1 to OpenAI's `reasoning_effort`.
+    # See https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking
+    #     https://platform.claude.com/docs/en/build-with-claude/effort
+    reasoning_kwargs: dict = {}
+    if model.args.reasoning_effort and model.api_model in models_requiring_streaming:
+        thinking_cfg: dict = {"type": "adaptive"}
+        # Opus 4.7 omits thinking content by default; opt back in to summarized so
+        # any logging/inspection of `message.content` still sees thinking blocks.
+        if model.api_model == "claude-opus-4-7":
+            thinking_cfg["display"] = "summarized"
+        reasoning_kwargs["thinking"] = thinking_cfg
+        reasoning_kwargs["output_config"] = {"effort": model.args.reasoning_effort}
+
+    if model.api_model in models_requiring_streaming:
+        max_tokens = model.model_metadata["max_tokens"]
+
+        global ANTHROPIC_MODERN_MODELS_WARNING_PRINTED
+        if not ANTHROPIC_MODERN_MODELS_WARNING_PRINTED:
+            ANTHROPIC_MODERN_MODELS_WARNING_PRINTED = True
+            print(f"Anthropic model '{model.api_model}' with max_tokens={max_tokens} requires streaming")
+            print(f"{model.api_model}: temperature={model.args.temperature} and top_p={model.args.top_p} "
+                  f"cannot both be specified for this model. top_p will be omitted in favor of temperature, "
+                  f"for this and further requests.")
+            if reasoning_kwargs:
+                print(f"{model.api_model}: adaptive thinking enabled with effort='{model.args.reasoning_effort}'.")
+
+        # See Anthropic Streaming API: https://platform.claude.com/docs/en/api/sdks/python#streaming-responses
+        with model.api.messages.stream(
+                messages=messages,
+                max_tokens=max_tokens,
+                model=model.api_model,
+                temperature=model.args.temperature,
+                # NOTE: top_p is omitted due to 400 Bad Request error:
+                # '`temperature` and `top_p` cannot both be specified for this model. Please use only one.'
+                # top_p=model.args.top_p,
+                system=system_message,
+                extra_body=extra_body,
+                **reasoning_kwargs,
+        ) as stream:
+            text = stream.get_final_text()
+            message = stream.get_final_message()
+            usage = message.usage
+            # Anthropic's `usage` does not expose reasoning_tokens separately (they're
+            # billed inside `output_tokens`). Re-tokenize the thinking blocks via the
+            # free `messages.count_tokens` endpoint to get an exact reasoning_tokens.
+            reasoning_tokens = _count_anthropic_thinking_tokens(model, message.content)
+            model.update_stats(
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                reasoning_tokens=reasoning_tokens,
+            )
+            return text
+    else:
+        # Perform Anthropic API call
+        response = model.api.messages.create(
+            messages=messages,
+            max_tokens=model.model_metadata["max_tokens"],
+            model=model.api_model,
+            temperature=model.args.temperature,
+            top_p=model.args.top_p,
+            system=system_message,
+            extra_body=extra_body,
+            **reasoning_kwargs,
+        )
+
+        # Calculate + update costs, return response
+        reasoning_tokens = _count_anthropic_thinking_tokens(model, response.content)
+        model.update_stats(
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            reasoning_tokens,
+        )
+        return "\n".join([x.text for x in response.content if getattr(x, "type", None) == "text"])
 
 
 class OllamaModel(BaseModel):

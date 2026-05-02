@@ -313,6 +313,22 @@ class SWEEnv(gym.Env):
                 timeout_duration=LONG_TIMEOUT,
             )
 
+        # Re-apply metamorphic patch if it exists in the image
+        # The patch file is created during image build and stored at /home/metamorphic_base.patch
+        self.communicate_with_handling(
+            input=(
+                "if [ -f /home/metamorphic_base.patch ]; then "
+                "git apply /home/metamorphic_base.patch && "
+                "git add -A && "
+                "git -c user.email='mswe-agent@metamorphic.py' -c user.name='metamorphic-transformation-patch' "
+                "commit -m 'Re-apply metamorphic_base_patch transformation'; "
+                "echo 'Metamorphic patch re-applied successfully'; "
+                "fi"
+            ),
+            error_msg="Failed to re-apply metamorphic patch",
+            timeout_duration=LONG_TIMEOUT,
+        )
+
         # pre-install dependencies for swe-agent ACI tools
         for cmd in [
             "apt-get update",

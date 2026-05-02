@@ -67,10 +67,19 @@ class Image:
         return NotImplementedError
 
     def image_full_name(self) -> str:
-        return f"{self.image_name()}:{self.image_tag()}"
+        # Prefix instance image tags (pr-*) with `base.strategy` so that different metamorphic
+        # datasets (s1-renaming, s2-structural, _test, ...) produce distinct images and coexist.
+        # Base/tooling images (tag "base") are intentionally not prefixed: they're identical across
+        # strategies and the Dockerfile FROM clause references them via dependency().image_tag()
+        # directly rather than image_full_name().
+        strategy = (self.pr.base.strategy or "").strip()
+        tag = self.image_tag()
+        if strategy and tag.startswith("pr-"):
+            tag = f"{strategy}-{tag}"
+        return f"{self.image_name()}:{tag}"
 
     def image_name(self) -> str:
-        raise NotImplementedError
+        return f"{self.pr.org}/{self.pr.repo}".lower()
 
     def image_tag(self) -> str:
         raise NotImplementedError

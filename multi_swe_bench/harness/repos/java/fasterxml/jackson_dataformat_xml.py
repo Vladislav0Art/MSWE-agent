@@ -1,4 +1,5 @@
 import re
+import textwrap
 from typing import Optional, Union
 
 from multi_swe_bench.harness.image import Config, File, Image
@@ -7,7 +8,7 @@ from multi_swe_bench.harness.pull_request import PullRequest
 from multi_swe_bench.harness.metamorphic import Metamorphic
 
 
-class Fastjson2ImageBase(Image):
+class JacksonDataformatXmlImageBase(Image):
     def __init__(self, pr: PullRequest, config: Config):
         self._pr = pr
         self._config = config
@@ -21,10 +22,7 @@ class Fastjson2ImageBase(Image):
         return self._config
 
     def dependency(self) -> Union[str, "Image"]:
-        return "ubuntu:20.04"
-
-    def image_name(self) -> str:
-        return f"{self.pr.org}/{self.pr.repo}".lower()
+        return "ubuntu:22.04"
 
     def image_tag(self) -> str:
         return "base"
@@ -49,17 +47,13 @@ class Fastjson2ImageBase(Image):
 
 {self.global_env}
 
-ENV JAVA_TOOL_OPTIONS="-Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai"
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
-
 WORKDIR /home/
+RUN apt-get update && apt-get install -y git openjdk-8-jdk
+RUN apt-get install -y maven
 
-RUN apt update && apt install -y gnupg ca-certificates git curl
-RUN curl -s https://repos.azul.com/azul-repo.key | gpg --dearmor -o /usr/share/keyrings/azul.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/azul.gpg] https://repos.azul.com/zulu/deb stable main" | tee /etc/apt/sources.list.d/zulu.list
-RUN apt update && apt install -y zulu8-jdk
 {code}
 
 {self.clear_env}
@@ -67,7 +61,7 @@ RUN apt update && apt install -y zulu8-jdk
 """
 
 
-class Fastjson2ImageDefault(Image):
+class JacksonDataformatXmlImageDefault(Image):
     def __init__(self, pr: PullRequest, config: Config):
         self._pr = pr
         self._config = config
@@ -80,17 +74,36 @@ class Fastjson2ImageDefault(Image):
     def config(self) -> Config:
         return self._config
 
-    def dependency(self) -> Image:
-        return Fastjson2ImageBase(self.pr, self._config)
-
-    def image_name(self) -> str:
-        return f"{self.pr.org}/{self.pr.repo}".lower()
+    def dependency(self) -> Image | None:
+        return JacksonDataformatXmlImageBase(self.pr, self._config)
 
     def image_tag(self) -> str:
         return f"pr-{self.pr.number}"
 
     def workdir(self) -> str:
         return f"pr-{self.pr.number}"
+
+    def old_version(self) -> str:
+        old_versions: dict[int, str] = {
+            531: "2.14.0-SNAPSHOT",
+            544: "2.14.0-SNAPSHOT",
+            590: "2.15.0-rc3-SNAPSHOT",
+            638: "2.17.0-SNAPSHOT",
+            644: "2.17.0-SNAPSHOT",
+        }
+
+        return old_versions.get(self.pr.number, "2.15.0-rc2-SNAPSHOT")
+
+    def new_version(self) -> str:
+        new_versions: dict[int, str] = {
+            531: "2.14.4-SNAPSHOT",
+            544: "2.14.4-SNAPSHOT",
+            590: "2.15.5-SNAPSHOT",
+            638: "2.17.4-SNAPSHOT",
+            644: "2.17.4-SNAPSHOT",
+        }
+
+        return new_versions.get(self.pr.number, "2.15.5-SNAPSHOT")
 
     def files(self) -> list[File]:
         return [
@@ -123,9 +136,7 @@ fi
 echo "check_git_changes: No uncommitted changes"
 exit 0
 
-""".format(
-                    pr=self.pr
-                ),
+""".format(),
             ),
             File(
                 ".",
@@ -134,13 +145,6 @@ exit 0
 set -e
 
 cd /home/{self.pr.repo}
-git config core.autocrlf input
-git config core.filemode false
-echo ".gitattributes" >> .git/info/exclude
-echo "*.zip binary" >> .gitattributes
-echo "*.png binary" >> .gitattributes
-echo "*.jpg binary" >> .gitattributes
-git add .
 git reset --hard
 bash /home/check_git_changes.sh
 git checkout {self.pr.base.sha}
@@ -150,8 +154,12 @@ git checkout {self.pr.base.sha}
 
 bash /home/check_git_changes.sh
 
-./mvnw -V --no-transfer-progress -Pgen-javadoc -Pgen-dokka clean package -Dsurefire.useFile=false -Dmaven.test.skip=false -DfailIfNoTests=false || true
+file="/home/{self.pr.repo}/pom.xml"
+old_version="{self.old_version()}"
+new_version="{self.new_version()}"
+sed -i "s/$old_version/$new_version/g" "$file"
 
+mvn clean test -Dmaven.test.skip=false -DfailIfNoTests=false || true
 """
             ),
             File(
@@ -161,11 +169,8 @@ bash /home/check_git_changes.sh
 set -e
 
 cd /home/{pr.repo}
-./mvnw -V --no-transfer-progress -Pgen-javadoc -Pgen-dokka clean test -Dsurefire.useFile=false -Dmaven.test.skip=false -DfailIfNoTests=false
-
-""".format(
-                    pr=self.pr
-                ),
+mvn clean test -Dmaven.test.skip=false -DfailIfNoTests=false
+""".format(pr=self.pr),
             ),
             File(
                 ".",
@@ -174,12 +179,10 @@ cd /home/{pr.repo}
 set -e
 
 cd /home/{pr.repo}
-git apply /home/test.patch
-./mvnw -V --no-transfer-progress -Pgen-javadoc -Pgen-dokka clean test -Dsurefire.useFile=false -Dmaven.test.skip=false -DfailIfNoTests=false
+git apply --whitespace=nowarn /home/test.patch
+mvn clean test -Dmaven.test.skip=false -DfailIfNoTests=false
 
-""".format(
-                    pr=self.pr
-                ),
+""".format(pr=self.pr),
             ),
             File(
                 ".",
@@ -188,12 +191,10 @@ git apply /home/test.patch
 set -e
 
 cd /home/{pr.repo}
-git apply /home/test.patch /home/fix.patch
-./mvnw -V --no-transfer-progress -Pgen-javadoc -Pgen-dokka clean test -Dsurefire.useFile=false -Dmaven.test.skip=false -DfailIfNoTests=false
+git apply --whitespace=nowarn /home/test.patch /home/fix.patch
+mvn clean test -Dmaven.test.skip=false -DfailIfNoTests=false
 
-""".format(
-                    pr=self.pr
-                ),
+""".format(pr=self.pr),
             ),
         ]
 
@@ -207,22 +208,74 @@ git apply /home/test.patch /home/fix.patch
             copy_commands += f"COPY {file.name} /home/\n"
 
         prepare_commands = "RUN bash /home/prepare.sh"
+        proxy_setup = ""
+        proxy_cleanup = ""
 
+        if self.global_env:
+            # Extract proxy host and port
+            proxy_host = None
+            proxy_port = None
+
+            for line in self.global_env.splitlines():
+                match = re.match(
+                    r"^ENV\s*(http[s]?_proxy)=http[s]?://([^:]+):(\d+)", line
+                )
+                if match:
+                    proxy_host = match.group(2)
+                    proxy_port = match.group(3)
+                    break
+            if proxy_host and proxy_port:
+                proxy_setup = textwrap.dedent(
+                    f"""
+                RUN mkdir -p ~/.m2 && \\
+                    if [ ! -f ~/.m2/settings.xml ]; then \\
+                        echo '<?xml version="1.0" encoding="UTF-8"?>' > ~/.m2/settings.xml && \\
+                        echo '<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"' >> ~/.m2/settings.xml && \\
+                        echo '          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"' >> ~/.m2/settings.xml && \\
+                        echo '          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">' >> ~/.m2/settings.xml && \\
+                        echo '</settings>' >> ~/.m2/settings.xml; \\
+                    fi && \\
+                    sed -i '$d' ~/.m2/settings.xml && \\
+                    echo '<proxies>' >> ~/.m2/settings.xml && \\
+                    echo '    <proxy>' >> ~/.m2/settings.xml && \\
+                    echo '        <id>example-proxy</id>' >> ~/.m2/settings.xml && \\
+                    echo '        <active>true</active>' >> ~/.m2/settings.xml && \\
+                    echo '        <protocol>http</protocol>' >> ~/.m2/settings.xml && \\
+                    echo '        <host>{proxy_host}</host>' >> ~/.m2/settings.xml && \\
+                    echo '        <port>{proxy_port}</port>' >> ~/.m2/settings.xml && \\
+                    echo '        <username></username>' >> ~/.m2/settings.xml && \\
+                    echo '        <password></password>' >> ~/.m2/settings.xml && \\
+                    echo '        <nonProxyHosts></nonProxyHosts>' >> ~/.m2/settings.xml && \\
+                    echo '    </proxy>' >> ~/.m2/settings.xml && \\
+                    echo '</proxies>' >> ~/.m2/settings.xml && \\
+                    echo '</settings>' >> ~/.m2/settings.xml
+                """
+                )
+
+                proxy_cleanup = textwrap.dedent(
+                    """
+                    RUN sed -i '/<proxies>/,/<\\/proxies>/d' ~/.m2/settings.xml
+                """
+                )
         return f"""FROM {name}:{tag}
 
 {self.global_env}
 
+{proxy_setup}
+
 {copy_commands}
 
 {prepare_commands}
+
+{proxy_cleanup}
 
 {self.clear_env}
 
 """
 
 
-@Instance.register("alibaba", "fastjson2")
-class Fastjson2(Instance):
+@Instance.register("fasterxml", "jackson-dataformat-xml")
+class JacksonDataformatXml(Instance):
     def __init__(self, pr: PullRequest, config: Config, *args, **kwargs):
         super().__init__()
         self._pr = pr
@@ -233,21 +286,36 @@ class Fastjson2(Instance):
         return self._pr
 
     def dependency(self) -> Optional[Image]:
-        return Fastjson2ImageDefault(self.pr, self._config)
+        return JacksonDataformatXmlImageDefault(self.pr, self._config)
 
-    def run(self) -> str:
+    def run(self, run_cmd: str = "") -> str:
+        if run_cmd:
+            return run_cmd
+
         return "bash /home/run.sh"
 
-    def test_patch_run(self) -> str:
+    def test_patch_run(self, test_patch_run_cmd: str = "") -> str:
+        if test_patch_run_cmd:
+            return test_patch_run_cmd
+
         return "bash /home/test-run.sh"
 
-    def fix_patch_run(self) -> str:
+    def fix_patch_run(self, fix_patch_run_cmd: str = "") -> str:
+        if fix_patch_run_cmd:
+            return fix_patch_run_cmd
+
         return "bash /home/fix-run.sh"
 
     def parse_log(self, test_log: str) -> TestResult:
         passed_tests = set()
         failed_tests = set()
         skipped_tests = set()
+
+        def remove_ansi_escape_sequences(text):
+            ansi_escape_pattern = re.compile(r"\x1B\[[0-?9;]*[mK]")
+            return ansi_escape_pattern.sub("", text)
+
+        test_log = remove_ansi_escape_sequences(test_log)
 
         pattern = re.compile(
             r"Tests run: (\d+), Failures: (\d+), Errors: (\d+), Skipped: (\d+), Time elapsed: [\d.]+ .+? in (.+)"

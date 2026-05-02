@@ -8,3 +8,12 @@ from multi_swe_bench.harness.repos.java.mockito import *
 from multi_swe_bench.harness.repos.java.pmd import *
 from multi_swe_bench.harness.repos.java.ReactiveX import *
 from multi_swe_bench.harness.repos.java.spotbugs import *
+# newly added modules from multi_swe_bench
+from multi_swe_bench.harness.repos.java.fasterxml import *
+from multi_swe_bench.harness.repos.java.Graylog2 import *
+from multi_swe_bench.harness.repos.java.OpenRefine import *
+from multi_swe_bench.harness.repos.java.apache import *
+from multi_swe_bench.harness.repos.java.google import *
+from multi_swe_bench.harness.repos.java.googlecontainertools import *
+from multi_swe_bench.harness.repos.java.micronautprojects import *
+from multi_swe_bench.harness.repos.java.provectus import *
