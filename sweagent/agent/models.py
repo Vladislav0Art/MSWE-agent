@@ -466,9 +466,12 @@ class AnthropicModel(BaseModel):
 
     def __init__(self, args: ModelArguments, commands: list[Command]):
         super().__init__(args, commands)
+
         use_grazie_proxy = keys_config.get("USE_GRAZIE_PROXY", False)
-        # either boolean true or stringified "true"
-        if (use_grazie_proxy is True) or (type(use_grazie_proxy) is str and use_grazie_proxy.lower() == "true"):
+        use_litellm_proxy = keys_config.get("USE_LITELLM_PROXY", False)
+
+        if is_true(use_grazie_proxy):
+            print("Using Grazie for inference")
             base_url = keys_config.get("GRAZIE_ANTHROPIC_BASE_URL")
             api_key = keys_config["GRAZIE_API_KEY"]
             additional_headers = {
@@ -477,15 +480,22 @@ class AnthropicModel(BaseModel):
                 # use Grazie JWT token
                 "Grazie-Authenticate-JWT": api_key,
             }
+            self.use_litellm_proxy = False
+        elif is_true(use_litellm_proxy):
+            print("Using LiteLLM for inference")
+            base_url = keys_config.get("LITELLM_ANTHROPIC_BASE_URL")
+            api_key = keys_config.get("LITELLM_API_KEY")
+            additional_headers = None
+            self.use_litellm_proxy = True
         else:
+            print("Using plain Anthropic endpoint for inference")
             base_url = keys_config.get("ANTHROPIC_BASE_URL", None)
             api_key = keys_config["ANTHROPIC_API_KEY"]
             additional_headers = None
+            self.use_litellm_proxy = False
 
-        print(f"Use Grazie: {use_grazie_proxy}")
-        print(f"Anthropic API URL: {base_url}")
+        print(f"Selected Anthropic API URL: {base_url}")
 
-        # Set Anthropic key
         self.api = Anthropic(
             api_key=api_key,
             base_url=base_url,
@@ -699,6 +709,14 @@ def anthropic_query(model: AnthropicModel | BedrockModel, history: list[dict[str
     system_message = "\n".join([entry["content"] for entry in history if entry["role"] == "system"])
     messages = anthropic_history_to_messages(model, history)
 
+    # When routing through the LiteLLM proxy, bypass its response cache so we
+    # always get a fresh completion. See https://docs.litellm.ai/docs/proxy/caching#no-cache
+    extra_body = (
+        {"cache": {"no-cache": True}}
+        if isinstance(model, AnthropicModel) and getattr(model, "use_litellm_proxy", False)
+        else None
+    )
+
     models_requiring_streaming = [
         # newer models with high max tokens require streaming
         "claude-opus-4-6",
@@ -726,6 +744,7 @@ def anthropic_query(model: AnthropicModel | BedrockModel, history: list[dict[str
                 # '`temperature` and `top_p` cannot both be specified for this model. Please use only one.'
                 # top_p=model.args.top_p,
                 system=system_message,
+                extra_body=extra_body,
         ) as stream:
             text = stream.get_final_text()
             message = stream.get_final_message()
@@ -742,6 +761,7 @@ def anthropic_query(model: AnthropicModel | BedrockModel, history: list[dict[str
             temperature=model.args.temperature,
             top_p=model.args.top_p,
             system=system_message,
+            extra_body=extra_body,
         )
 
         # Calculate + update costs, return response
