@@ -670,6 +670,39 @@ def anthropic_history_to_messages(
 # is dropped in favor of temperature for Anthropic modern (4.6) streaming models
 ANTHROPIC_MODERN_MODELS_WARNING_PRINTED = False
 
+
+def _count_anthropic_thinking_tokens(model: "AnthropicModel | BedrockModel", content) -> int:
+    """Exact thinking-token count via the Anthropic `messages.count_tokens` endpoint.
+
+    Anthropic's `usage` object does not expose reasoning tokens separately (they're
+    folded into `output_tokens`). To populate the dedicated `reasoning_tokens` counter
+    with an exact value we re-tokenize the concatenated thinking-block text via
+    `POST /v1/messages/count_tokens` (free of charge; one extra round-trip per query).
+
+    Returns 0 when there is no thinking content, when the model API has no
+    `count_tokens` helper (e.g. `AnthropicBedrock`), or when the call fails.
+    """
+    thinking_text = "".join(
+        getattr(b, "thinking", "") or ""
+        for b in content
+        if getattr(b, "type", None) == "thinking"
+    )
+    if not thinking_text:
+        return 0
+    if not isinstance(model, AnthropicModel):
+        # AnthropicBedrock has no count_tokens helper (see anthropic-sdk-python#353).
+        return 0
+    try:
+        result = model.api.messages.count_tokens(
+            model=model.api_model,
+            messages=[{"role": "user", "content": thinking_text}],
+        )
+        return result.input_tokens
+    except Exception as err:
+        logger.warning(f"Failed to count Anthropic thinking tokens: {err}")
+        return 0
+
+
 def anthropic_query(model: AnthropicModel | BedrockModel, history: list[dict[str, str]]) -> str:
     """
     Query the Anthropic API with the given `history` and return the response.
@@ -768,17 +801,10 @@ def anthropic_query(model: AnthropicModel | BedrockModel, history: list[dict[str
             text = stream.get_final_text()
             message = stream.get_final_message()
             usage = message.usage
-            # Anthropic does not expose reasoning_tokens as a separate usage field —
-            # thinking tokens are billed as part of `output_tokens` (so cost is correct).
-            # Estimate reasoning_tokens from the textual length of any thinking blocks
-            # in `message.content` so the dedicated counter still has signal. ~4 chars/token
-            # is the standard rule of thumb; exact count would require an extra API call.
-            reasoning_chars = sum(
-                len(getattr(b, "thinking", "") or "")
-                for b in message.content
-                if getattr(b, "type", None) == "thinking"
-            )
-            reasoning_tokens = reasoning_chars // 4
+            # Anthropic's `usage` does not expose reasoning_tokens separately (they're
+            # billed inside `output_tokens`). Re-tokenize the thinking blocks via the
+            # free `messages.count_tokens` endpoint to get an exact reasoning_tokens.
+            reasoning_tokens = _count_anthropic_thinking_tokens(model, message.content)
             model.update_stats(
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
@@ -799,15 +825,11 @@ def anthropic_query(model: AnthropicModel | BedrockModel, history: list[dict[str
         )
 
         # Calculate + update costs, return response
-        reasoning_chars = sum(
-            len(getattr(b, "thinking", "") or "")
-            for b in response.content
-            if getattr(b, "type", None) == "thinking"
-        )
+        reasoning_tokens = _count_anthropic_thinking_tokens(model, response.content)
         model.update_stats(
             response.usage.input_tokens,
             response.usage.output_tokens,
-            reasoning_chars // 4,
+            reasoning_tokens,
         )
         return "\n".join([x.text for x in response.content if getattr(x, "type", None) == "text"])
 
